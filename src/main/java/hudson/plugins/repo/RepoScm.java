@@ -65,6 +65,7 @@ public class RepoScm extends SCM {
 			.getLogger("hudson.plugins.repo.RepoScm");
 
 	private final String manifestRepositoryUrl;
+	private final String manifestBaseBranch;
 
 	// Advanced Fields:
 	private final String manifestBranch;
@@ -88,6 +89,14 @@ public class RepoScm extends SCM {
 	 */
 	public String getManifestBranch() {
 		return manifestBranch;
+	}
+	
+	/**
+	 * Returns the repositories branch name. By default, this is null and repo
+	 * defaults to "master".
+	 */
+	public String getManifestBaseBranch() {
+		return manifestBaseBranch;
 	}
 
 	/**
@@ -140,6 +149,8 @@ public class RepoScm extends SCM {
 	 *            The branch of the manifest repository. Typically this is null
 	 *            or the empty string, which will cause repo to default to
 	 *            "master".
+	 * @param manifestBaseBranch
+	 *            The branch of the repositories. 
 	 * @param manifestFile
 	 *            The file to use as the repository manifest. Typically this is
 	 *            null which will cause repo to use the default of "default.xml"
@@ -159,8 +170,9 @@ public class RepoScm extends SCM {
 	public RepoScm(final String manifestRepositoryUrl,
 			final String manifestBranch, final String manifestFile,
 			final String mirrorDir, final int jobs,
-			final String localManifest, final String destinationDir) {
+			final String localManifest, final String destinationDir, final String manifestBaseBranch) {
 		this.manifestRepositoryUrl = manifestRepositoryUrl;
+		this.manifestBaseBranch = manifestBaseBranch;
 		this.manifestBranch = Util.fixEmptyAndTrim(manifestBranch);
 		this.manifestFile = Util.fixEmptyAndTrim(manifestFile);
 		this.mirrorDir = Util.fixEmptyAndTrim(mirrorDir);
@@ -169,6 +181,8 @@ public class RepoScm extends SCM {
 		this.destinationDir = Util.fixEmptyAndTrim(destinationDir);
 		// TODO: repoUrl
 		this.repoUrl = null;
+		debug.log(Level.INFO, "manifestBaseBranch: "
+				+ manifestBaseBranch);
 	}
 
 	@Override
@@ -190,41 +204,48 @@ public class RepoScm extends SCM {
 			final SCMRevisionState baseline) throws IOException,
 			InterruptedException {
 		SCMRevisionState myBaseline = baseline;
-		if (myBaseline == null) {
-			// Probably the first build, or possibly an aborted build.
-			myBaseline = getLastState(project.getLastBuild());
-			if (myBaseline == null) {
-				return PollingResult.BUILD_NOW;
-			}
-		}
 
-		FilePath repoDir;
-		if (destinationDir != null) {
-			repoDir = workspace.child(destinationDir);
-			if (!repoDir.isDirectory()) {
-				repoDir.mkdirs();
-			}
-		} else {
-			repoDir = workspace;
-		}
-
-		if (!checkoutCode(launcher, repoDir, listener.getLogger())) {
-			// Some error occurred, try a build now so it gets logged.
-			return new PollingResult(myBaseline, myBaseline,
-					Change.INCOMPARABLE);
-		}
-
-		final RevisionState currentState =
-				new RevisionState(getStaticManifest(launcher, repoDir,
-						listener.getLogger()), manifestBranch,
-						listener.getLogger());
-		final Change change;
-		if (currentState.equals(myBaseline)) {
-			change = Change.NONE;
-		} else {
-			change = Change.SIGNIFICANT;
-		}
-		return new PollingResult(myBaseline, currentState, change);
+		debug.log(Level.INFO, "compareRemoteRevisionWith: "
+					+ workspace.getName());
+		return PollingResult.BUILD_NOW;
+//		if (myBaseline == null) {
+//			// Probably the first build, or possibly an aborted build.
+//			myBaseline = getLastState(project.getLastBuild());
+//			if (myBaseline == null) {
+//				return PollingResult.BUILD_NOW;
+//			}
+//		}
+//
+//		FilePath repoDir;
+//		if (destinationDir != null) {
+//			repoDir = workspace.child(destinationDir);
+//			if (!repoDir.isDirectory()) {
+//				repoDir.mkdirs();
+//			}
+//		} else {
+//			repoDir = workspace;
+//		}
+//
+//		if (!checkoutCode(launcher, repoDir, listener.getLogger(), null)) {
+//			// Some error occurred, try a build now so it gets logged.
+//			return new PollingResult(myBaseline, myBaseline,
+//					Change.INCOMPARABLE);
+//		}
+//		debug.log(Level.INFO, "compareRemoteRevisionWith2: "
+//					+ workspace.getName());
+//		final RevisionState currentState =
+//				new RevisionState(getStaticManifest(launcher, repoDir,
+//						listener.getLogger()), manifestBranch,
+//						listener.getLogger());
+//		final Change change;
+//		if (currentState.equals(myBaseline)) {
+//			change = Change.NONE;
+//			debug.log(Level.INFO, "currentState.equals(myBaseline) ");
+//		} else {
+//			change = Change.SIGNIFICANT;
+//			debug.log(Level.INFO, "currentState not equals(myBaseline) ");
+//		}
+//		return new PollingResult(myBaseline, currentState, change);
 	}
 
 	@Override
@@ -243,8 +264,21 @@ public class RepoScm extends SCM {
 		} else {
 			repoDir = workspace;
 		}
-
-		if (!checkoutCode(launcher, repoDir, listener.getLogger())) {
+		final GitHubPullRequestAction action
+				= build.getAction(GitHubPullRequestAction.class);
+		String branch = new String();
+		if (action == null) {
+			debug.log(Level.INFO, "no action exist");
+		}
+		try {
+			String urlName = action.getUrlName();
+			debug.log(Level.INFO, "action getUrlName: " + urlName);
+			branch = action.getData().get("branch");
+			debug.log(Level.INFO, "Checking out code on branch: " + branch);
+		} catch (Exception e) {
+			debug.log(Level.INFO, "Get branch error");
+		}
+		if (!checkoutCode(launcher, repoDir, listener.getLogger(), branch)) {
 			return false;
 		}
 		final String manifest =
@@ -281,11 +315,13 @@ public class RepoScm extends SCM {
 	}
 
 	private boolean checkoutCode(final Launcher launcher,
-			final FilePath workspace, final OutputStream logger)
+			final FilePath workspace, final OutputStream logger,
+			final String branch)
 			throws IOException, InterruptedException {
 		final List<String> commands = new ArrayList<String>(4);
 
-		debug.log(Level.INFO, "Checking out code in: " + workspace.getName());
+		debug.log(Level.INFO, "Checking out code in: " + workspace.getName()
+				+ " branch:" + branch + " manifestRepositoryUrl:" + manifestRepositoryUrl + "manifestBaseBranch:" + manifestBaseBranch);
 
 		commands.add(getDescriptor().getExecutable());
 		commands.add("init");
@@ -337,6 +373,33 @@ public class RepoScm extends SCM {
 				return false;
 			}
 		}
+		String checkouBranch = manifestBaseBranch == null ? "master" : manifestBaseBranch; 
+		
+		commands.clear();
+		commands.add(getDescriptor().getExecutable());
+		commands.add("forall");
+		commands.add("-c");
+		commands.add("git checkout " + checkouBranch);
+		launcher.launch().stdout(logger).pwd(workspace).cmds(commands)
+			.join();
+		
+		if (branch != null) {
+			commands.clear();
+			commands.add(getDescriptor().getExecutable());
+			commands.add("forall");
+			commands.add("-c");
+			commands.add("git checkout " + branch);
+			launcher.launch().stdout(logger).pwd(workspace).cmds(commands)
+				.join();
+		}
+		commands.clear();
+		commands.add(getDescriptor().getExecutable());
+		commands.add("forall");
+		commands.add("-c");
+		commands.add("git pull");
+		launcher.launch().stdout(logger).pwd(workspace).cmds(commands)
+			.join();
+
 		return true;
 	}
 
