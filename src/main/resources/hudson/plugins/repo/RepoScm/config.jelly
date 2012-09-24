@@ -9,6 +9,10 @@
 	<f:entry title="Manifest Repository Url" help="/plugin/repo/help-manifestRepositoryUrl.html">
 		<f:textbox name="repo.manifestRepositoryUrl" value="${scm.manifestRepositoryUrl}"/>
 	</f:entry>
+	
+	<f:entry title="Base Branch" help="/plugin/repo/help-manifestBaseBranch.html">
+		<f:textbox name="repo.manifestBaseBranch" value="${scm.manifestBaseBranch}"/>
+	</f:entry>
 
 	<f:advanced>
 
